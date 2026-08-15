@@ -128,10 +128,10 @@ st.markdown(
 st.markdown(
     """
 <div class="warning-bar">
-    <p class="warning-text">※此系統為個人自主開發，請勿用做非法行為😈</p>
-    <p class="warning-text">※已強化全網小報抓取與記者識別演算法，結合雙重檢核精準過濾無關新聞🌏</p>
-    <p class="warning-text">※檢索資料庫為「彰化家扶」常見出報媒體，資料庫將不定期更新👀</p>
-    <p class="warning-text">※此系統供同工免費使用，惟開發者仍保有此系統所有權，敬請尊重著作權🔧</p>
+    <p class="warning-text">※本系統為個人自主開發，意在優化查報工作流程與準確度，請勿用於非法行為😈</p>
+    <p class="warning-text">※已強化全網電子報擷取與記者識別演算法，加入雙重檢核功能，精準過濾無關新聞🌏</p>
+    <p class="warning-text">※檢索資料庫（database.csv）為「彰化家扶」常見出報媒體清單，資料庫將不定期更新👀</p>
+    <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究🔧</p>
 </div>
 """,
     unsafe_allow_html=True,
