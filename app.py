@@ -494,7 +494,7 @@ def run_news_pipeline(
     )
 
     # 1. 啟動第一階段：全網精準 RSS 檢索 (帶入目標年份過濾)
-    with st.spinner(f"🕷️ [第一階段] 正在搜羅全網新聞報導『"{org}" "{keyword}"』 (目標年份：{year})..."):
+    with st.spinner(f"🕷️ [第一階段] 正在搜羅全網新聞報導『\"{org}\" \"{keyword}\"』 (目標年份：{year})..."):
         raw_results = fetch_google_news_rss(org, keyword, target_year=year)
 
     # 2. 自動二次探針：針對 database.csv 提供的媒體 Domain 逐一/分批進行站內搜尋 (Site-Search)
