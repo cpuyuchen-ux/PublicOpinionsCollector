@@ -45,7 +45,7 @@ st.set_page_config(
 if "search_history" not in st.session_state:
     st.session_state["search_history"] = []
 
-# CSS 樣式 (包含 5 秒氣球動畫)
+# CSS 樣式
 st.markdown(
     """
 <style>
@@ -118,38 +118,27 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# 2. 標題與警示橫幅區塊
+# 2. 標題與警示區塊
 # ---------------------------------------------------------------------------
-st.markdown(
-    '<div class="main-header">📰 彰化家扶中心輿情自動檢索與報表生成系統</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    '<div class="sub-header">支援全網頁小報無 API 本地深度檢索、雙重關聯過濾與記者精準辨識</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="main-header">📰 彰化家扶中心輿情自動檢索與報表生成系統</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">支援多重轉載媒體深層檢索、極致記者辨識與完整原始出處保留</div>', unsafe_allow_html=True)
 
 st.markdown(
     """
 <div class="warning-bar">
     <p class="warning-text">※本系統為個人自主開發，旨在優化查詢媒體露出流程與準確度，請勿用於非法行為😈</p>
-    <p class="warning-text">※已強化全網電子報巡查與撰文記者姓名識別，並加入雙重檢核功能，過濾非相關新聞🌏</p>
-    <p class="warning-text">※檢索資料庫（database.csv）為「彰化家扶」常見出報媒體清單，開發者將不定期更新👀</p>
-    <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究⚠️</p>
+    <p class="warning-text">※已強化「奧丁丁、PChome、奇摩、蕃新聞」等轉載大宗網站站內巡查機制🌏</p>
+    <p class="warning-text">※同網站同標題但網址不同（不同來源/露出）將完整保留，不進行強制去重，確保統計完整👀</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
 # ---------------------------------------------------------------------------
-# 3. 核心工具：自動把網址/HTML/字串轉成純 Domain
+# 3. 核心工具：自動擷取 Domain
 # ---------------------------------------------------------------------------
 
 def extract_domain(url_or_html):
-    """
-    將傳入的網址、HTML標籤或字串自動清理為純粹的主 Domain 
-    (例如：<a href="https://news.ltn.com.tw/"> -> ltn.com.tw)
-    """
     if not url_or_html or not isinstance(url_or_html, str):
         return ""
     
@@ -171,7 +160,7 @@ def extract_domain(url_or_html):
     return domain.lower()
 
 # ---------------------------------------------------------------------------
-# 4. 側邊欄與資料庫讀取 (含進度條顯示：📑已完成XX％)
+# 4. 側邊欄與 database.csv 讀取
 # ---------------------------------------------------------------------------
 st.sidebar.title("⚙️ 系統功能導覽")
 sidebar_option = st.sidebar.radio(
@@ -185,7 +174,7 @@ st.sidebar.markdown("---")
 db_file_path = "database.csv"
 media_type_map = {}
 db_domains = []
-db_media_list = []  # 保存 (媒體名稱, Domain) 對照
+db_media_list = [] 
 
 if os.path.exists(db_file_path):
     try:
@@ -228,20 +217,20 @@ if os.path.exists(db_file_path):
         st.sidebar.error(f"❌ 讀取 database.csv 失敗: {e}")
 
 # ---------------------------------------------------------------------------
-# 5. 核心演算法：網頁擷取 + 全能記者探針 + 彈性過濾機制
+# 5. 核心升級演算法：HTML+Meta探針 / 全能記者辨識 / 深層爬取
 # ---------------------------------------------------------------------------
 
-def fetch_article_text(url):
-    """嘗試取得新聞網頁的內文，用於精準抓取記者姓名與過濾雜訊"""
+def fetch_article_data(url):
+    """取得新聞網頁內文，並解析 HTML Meta Tag 提取記者姓名與內文"""
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
-        return ""
+        return "", ""
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=5, context=ssl_context) as response:
+        with urllib.request.urlopen(req, timeout=6, context=ssl_context) as response:
             charset = response.headers.get_param("charset") or "utf-8"
             try:
                 html = response.read().decode(charset, errors="replace")
@@ -250,50 +239,61 @@ def fetch_article_text(url):
 
             soup = BeautifulSoup(html, "html.parser")
 
+            meta_reporter = ""
+            author_meta = soup.find("meta", attrs={"name": re.compile(r"author|dnews:author|bnews:author", re.I)}) or \
+                          soup.find("meta", attrs={"property": re.compile(r"author|article:author", re.I)})
+            if author_meta and author_meta.get("content"):
+                meta_reporter = author_meta.get("content").strip()
+
             for script in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
                 script.extract()
 
             text = soup.get_text(separator=" ")
             clean_text = re.sub(r"\s+", " ", text).strip()
-            return clean_text[:2000] # 讀取前 2000 字
+            return clean_text[:3000], meta_reporter
     except Exception:
-        return ""
+        return "", ""
 
 
-def reporter_detector_sensor(article_text):
-    """
-    高精度新聞記者內文探針
-    支援常見 5 大署名型態：
-    1. 標準型：記者陳雅芳/彰化報導、記者 林明佑／台中報導
-    2. 括號型：（記者張小明／彰化報導）、〔記者李四／彰化報導〕
-    3. 無「記者」字樣型：陳雅芳／彰化報導、林明佑/彰化報導
-    4. 複合角色型：文／陳雅芳、圖／林明佑、攝影記者 張小明
-    """
+def reporter_detector_sensor_v2(article_text, meta_reporter=""):
+    """高精度新聞記者探針 V2 (支援 Meta 標籤 + 8 大常見署名型態)"""
+    if meta_reporter and 2 <= len(meta_reporter) <= 5 and not re.search(r"新聞|編輯|中心|即時", meta_reporter):
+        return meta_reporter
+
     if not article_text or not isinstance(article_text, str):
         return "編輯部"
 
     clean_text = re.sub(r"\s+", " ", article_text).strip()
 
     patterns = [
-        # 1. 帶「記者/攝影記者」+ 姓名 + 地名/類別 + 報導
-        r"(?:攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s]\s*[\u4e00-\u9fa5]{2,6}\s*報導",
+        # 1. 帶「記者/特派記者/實習記者/攝影記者」+ 姓名 + 地名/類別 + 報導
+        r"(?:特派|實習|攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s]\s*[\u4e00-\u9fa5]{2,6}\s*報導",
         
-        # 2. 括號/方括號包覆 (記者張小明／彰化報導) / 〔記者李四／彰化報導〕
-        r"[（\(〔\[]\s*(?:攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s]*[\u4e00-\u9fa5]*\s*報導\s*[）\)〕\]]",
+        # 2. 括號/方括號包覆 (記者張小明／彰化報導) / 〔記者李四／彰化報導〕/ 【記者王五／報導】
+        r"[（\(〔\[【]\s*(?:特派|攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s]*[\u4e00-\u9fa5]*\s*報導\s*[）\)〕\]】]",
         
-        # 3. 複合角色型：文／陳雅芳、圖／林明佑、文/圖 陳雅芳
-        r"(?:文|圖|攝影|撰文|責任編輯)\s*[\/／]\s*([\u4e00-\u9fa5]{2,4})",
+        # 3. 複合角色型：文／陳雅芳、圖／林明佑、撰文：張小明
+        r"(?:文|圖|攝影|撰文|責任編輯)\s*[:：\/／]\s*([\u4e00-\u9fa5]{2,4})",
         
         # 4. 無「記者」二字直接接地名報導 (例如：陳雅芳／彰化報導)
         r"(?<!新聞)(?<!中心)(?<!家扶)\b([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|台中|台北|高雄|地方|即時|綜合|專題|生活)+\s*報導",
         
-        # 5. 單純「記者 姓名 報導」
-        r"(?:攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*報導",
+        # 5. 單純「記者 姓名 報導」或 「記者 姓名/彰化專訪」
+        r"(?:特派|攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*(?:報導|專訪|隨筆)",
+        
+        # 6. 「【記者張小明/彰化報導】」形式
+        r"【\s*記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]",
+
+        # 7. 末尾署名：(陳雅芳) 或 [陳雅芳]
+        r"[（\(〔\[]\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|地方|報導)\s*[）\)〕\]]",
+        
+        # 8. 「記者姓名」獨立出現在前 200 字 (常見於 Yahoo/PChome 轉載)
+        r"記者\s*([\u4e00-\u9fa5]{2,4})\s*[\s\/／]",
     ]
 
     exclude_words = {
         "彰化", "台中", "台北", "地方", "即時", "綜合", "專題", "社會", "生活",
-        "新聞", "家扶", "中心", "本報", "特別", "責任", "編輯", "焦點", "總會", "報導"
+        "新聞", "家扶", "中心", "本報", "特別", "責任", "編輯", "焦點", "總會", "報導", "公益"
     }
 
     for pattern in patterns:
@@ -307,7 +307,6 @@ def reporter_detector_sensor(article_text):
 
 
 def parse_media_from_url_or_title(title, url, source_elem_text=None):
-    """本地辨識媒體名稱 (結合 Domain 與標題對照)"""
     title = str(title) if title else ""
     url = str(url) if url else ""
 
@@ -347,7 +346,6 @@ def parse_media_from_url_or_title(title, url, source_elem_text=None):
 
 
 def parse_pub_year(pub_date_str):
-    """解析 RSS 發布日期字串並提取年份"""
     if not pub_date_str:
         return None
     try:
@@ -361,7 +359,6 @@ def parse_pub_year(pub_date_str):
 
 
 def fetch_google_news_rss(query, target_year=None):
-    """標準 Google News RSS 檢索"""
     results = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -407,7 +404,6 @@ def fetch_google_news_rss(query, target_year=None):
 
 
 def lookup_media_type(media_name, media_map, url=""):
-    """對照媒體類別 (支援名稱與 Domain 對照)"""
     if url:
         dom = extract_domain(url)
         if dom in media_map:
@@ -426,7 +422,6 @@ def lookup_media_type(media_name, media_map, url=""):
 
 
 def clean_title_local(title):
-    """標題清理 (去除網站後綴)"""
     if not title:
         return ""
     try:
@@ -437,7 +432,6 @@ def clean_title_local(title):
 
 
 def trigger_5s_balloon_animation():
-    """發射 5 秒升空氣球動畫"""
     balloon_colors = ["#FF5722", "#2196F3", "#4CAF50", "#FFEB3B", "#9C27B0", "#E91E63"]
     balloons_html = '<div class="balloon-container">'
     for i in range(25):
@@ -454,7 +448,6 @@ def trigger_5s_balloon_animation():
 def run_news_pipeline(
     office, staff_name, org, keyword, year, media_map, db_domains, db_media_list
 ):
-    # 記錄檢索歷史
     st.session_state["search_history"].append(
         {
             "檢索時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -468,44 +461,57 @@ def run_news_pipeline(
 
     raw_results = []
 
-    # -----------------------------------------------------------------------
-    # 建議1調鬆：去除過度嚴格的雙引號，改為開放性 Google 搜尋 (調高抓取量)
-    # -----------------------------------------------------------------------
+    # 第一階段：Google News 全網抓取
     with st.spinner(f'🕷️ [階段一] 正在執行 Google 全網報導檢索：『{org} {keyword}』 (目標年份：{year})...'):
         primary_query = f'{org} {keyword}'
         raw_results = fetch_google_news_rss(primary_query, target_year=year)
 
-    # -----------------------------------------------------------------------
-    # 第二階段：備援邏輯 (若全網查無結果，自動對媒體清單進行站內搜尋 site:domain)
-    # -----------------------------------------------------------------------
-    if not raw_results and (db_domains or db_media_list):
-        st.warning("⚠️ 全網搜尋未發現直接報導，自動啟用「媒體站內精準二次檢索 (Fallback Logic)」...")
+    # 第二階段：強制對 CSV 清單與四大轉載平台執行深層站內檢索 (owlting, pchome, yahoo, yam)
+    st.info("🔎 [階段二] 正在為 database.csv 媒體與高轉載平台 (奧丁丁/PChome/奇摩/蕃新聞) 執行站內深度二次檢索...")
+    
+    # 建立多重站內檢索目標（含四大轉載平台與 database.csv）
+    mandatory_targets = [
+        ("奧丁丁新聞", "owlting.com"),
+        ("PChome新聞", "pchome.com.tw"),
+        ("Yahoo奇摩新聞", "yahoo.com"),
+        ("蕃新聞", "yam.com"),
+    ]
+    
+    search_targets = mandatory_targets + (db_media_list if db_media_list else [(f"站點{i}", d) for i, d in enumerate(db_domains)])
+    
+    # 網域去重
+    seen_target_doms = set()
+    unique_search_targets = []
+    for m, d in search_targets:
+        if d not in seen_target_doms and d != "":
+            seen_target_doms.add(d)
+            unique_search_targets.append((m, d))
+
+    fallback_progress = st.progress(0)
+    fallback_status = st.empty()
+    total_targets = len(unique_search_targets)
+
+    for i, (m_name, dom) in enumerate(unique_search_targets):
+        pct = int((i + 1) / total_targets * 100)
+        fallback_status.markdown(f"🔎 深度巡查《{m_name}》 (`site:{dom}`)...")
+        fallback_progress.progress(pct)
+
+        site_query = f'site:{dom} {org} {keyword}'
+        site_res = fetch_google_news_rss(site_query, target_year=year)
         
-        fallback_progress = st.progress(0)
-        fallback_status = st.empty()
-        
-        search_targets = db_media_list if db_media_list else [(f"站點{i}", d) for i, d in enumerate(db_domains)]
-        total_targets = len(search_targets)
+        for res in site_res:
+            res["media_name"] = m_name if m_name else res["media_name"]
+            raw_results.append(res)
 
-        for i, (m_name, dom) in enumerate(search_targets):
-            pct = int((i + 1) / total_targets * 100)
-            # 修正處：使用單引號避免 f-string 雙引號衝突崩潰
-            fallback_status.markdown(f"🔎 正在站內搜索《{m_name}》 ({dom})：`site:{dom} '{org}' '{keyword}'`...")
-            fallback_progress.progress(pct)
+        time.sleep(random.uniform(0.05, 0.2))
 
-            site_query = f'site:{dom} {org} {keyword}'
-            site_res = fetch_google_news_rss(site_query, target_year=year)
-            
-            for res in site_res:
-                res["media_name"] = m_name if m_name else res["media_name"]
-                raw_results.append(res)
+    fallback_progress.empty()
+    fallback_status.empty()
 
-            time.sleep(random.uniform(0.1, 0.3))
-
-        fallback_progress.empty()
-        fallback_status.empty()
-
-    # 網址去重
+    # -----------------------------------------------------------------------
+    # 【需求 3 核心修正】：僅對「絕對完全相同的 URL 網址」去重！
+    # 相同標題但不同 URL（例如轉載不同來源）將完全保留！
+    # -----------------------------------------------------------------------
     unique_raw = []
     seen_urls = set()
     for r in raw_results:
@@ -518,41 +524,36 @@ def run_news_pipeline(
         st.error("❌ 經全網與媒體站內二次檢索後，仍未抓取到相關報導，請檢查關鍵字或年份設定。")
         return []
 
-    # -----------------------------------------------------------------------
-    # 第三階段：新聞內文抓取 + 彈性雙重過濾 + 記者探針 (建議2調鬆)
-    # -----------------------------------------------------------------------
+    # 第三階段：新聞內文抓取 + 記者姓名探針
     results = []
     progress_text_slot = st.empty()
     progress_bar = st.progress(0)
     total_items = len(raw_results)
 
-    # 自動提煉簡稱探針 (如 "彰化家扶" -> "家扶")，防止因新聞寫簡稱而被誤刪
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
     for i, item in enumerate(raw_results):
         percent = int((i + 1) / total_items * 100)
-        progress_text_slot.markdown(f"✈️ **新聞深度解析、彈性過濾與記者探針辨識中：{percent}%**")
+        progress_text_slot.markdown(f"✈️ **新聞內文解析與記者姓名探針辨識中：{percent}%**")
         progress_bar.progress(percent)
 
         cleaned_title = clean_title_local(item["title"])
         media_name = item["media_name"]
         m_type = lookup_media_type(media_name, media_map, item["url"])
 
-        # 1. 抓取新聞內文前段 (抓取內文解決標題過短漏抓的問題)
-        article_snippet = fetch_article_text(item["url"])
+        # 抓取內文與 HTML Meta 記者資訊
+        article_snippet, meta_reporter = fetch_article_data(item["url"])
         combined_text = f"標題：{item['title']}\n內文：{article_snippet}"
 
-        # -------------------------------------------------------------------
-        # 建議2調鬆：允許「全稱」或「簡稱」符合，並兼顧關鍵字 (大幅避免漏抓)
-        # -------------------------------------------------------------------
+        # 寬鬆比對機制
         has_org = (org in cleaned_title) or (org in article_snippet) or (short_org in cleaned_title) or (short_org in article_snippet)
         has_keyword = (keyword in cleaned_title) or (keyword in article_snippet)
 
         if not (has_org and has_keyword):
             continue
 
-        # 2. 執行全能記者探針 (支援 5 大常見署名型態)
-        reporter_name = reporter_detector_sensor(combined_text)
+        # 執行升級版記者探針
+        reporter_name = reporter_detector_sensor_v2(combined_text, meta_reporter)
 
         results.append(
             {
@@ -618,6 +619,8 @@ if sidebar_option == "🔍 檢索系統":
 
             if final_data:
                 df_result = pd.DataFrame(final_data)
+                
+                # 【需求 3 核心修正】：僅刪除絕對相同 URL 的項目，完整保留同標題不同出處
                 df_result = df_result.drop_duplicates(subset=["新聞連結"])
 
                 st.success(f"🎉 成功捕捉到 {len(df_result)} 筆相關新聞報導！")
@@ -652,18 +655,16 @@ elif sidebar_option == "💡 系統簡介":
         """
     **彰化家扶中心輿情自動檢索與報表生成系統**旨在幫助同工快速彙整網路媒體報導。
 
-    * **全開放式彈性檢索**：移除死板的查詢框架，讓搜尋引擎能涵蓋「彰化家扶」、「家扶中心」等變體露出。
-    * **雙軌備援檢索**：先執行 Google 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
-    * **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度。
-    * **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
-    * **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等 5 大新聞署名格式。
+    * **雙軌站內巡查機制**：整合全網查詢與 `database.csv` + 強制巡查奧丁丁、PChome、奇摩、蕃新聞等各大轉載網站。
+    * **完整出處保留**：同網站不同 URL 即使標題相同亦不會被誤刪，確保轉載與原始出處統計不遺漏。
+    * **升級版記者探針 (Sensor V2)**：支援 HTML Meta 標籤與 8 種新聞署名格式解析，大幅降低「編輯部」出現率。
     * **無 API 依賴**：100% Python 演算法運行，防止觸發 Google 反爬蟲機制，並免除 API 配置與額度限制。
     """
     )
 
 elif sidebar_option == "📌 系統須知":
     st.subheader("📌 系統須知與使用規範")
-    st.success("※本系統已優化「搜尋條件放寬」、「簡稱彈性比對」與「記者姓名探針」，提升抓取量與精準度📈")
+    st.success("※本系統已優化「奧丁丁、PChome、奇摩新聞站內巡查」與「完整出處保留」📈")
     st.warning(
         """
     1. **使用規範**：本系統僅供彰化家扶內部輿情檢索使用，嚴禁用於商業爬蟲或任何非法用途🚫
