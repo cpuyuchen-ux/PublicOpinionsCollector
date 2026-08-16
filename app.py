@@ -1,6 +1,5 @@
 import datetime
 import io
-import json
 import os
 import random
 import re
@@ -29,12 +28,6 @@ except ImportError:
     st.error("❌ 系統缺少 'openpyxl' 套件（匯出 Excel 必備）！請在終端機執行：pip install openpyxl")
     st.stop()
 
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None
-
 # 全域 SSL context，避免爬取特定網站時因憑證問題報錯崩潰
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
@@ -49,17 +42,8 @@ st.set_page_config(
 )
 
 # 初始化 Session State
-if "api_count_today" not in st.session_state:
-    st.session_state["api_count_today"] = 0
-if "last_api_date" not in st.session_state:
-    st.session_state["last_api_date"] = datetime.date.today()
 if "search_history" not in st.session_state:
     st.session_state["search_history"] = []
-
-# 每日 API 計算器重置
-if st.session_state["last_api_date"] != datetime.date.today():
-    st.session_state["api_count_today"] = 0
-    st.session_state["last_api_date"] = datetime.date.today()
 
 # CSS 樣式 (包含 5 秒氣球動畫)
 st.markdown(
@@ -149,9 +133,9 @@ st.markdown(
     """
 <div class="warning-bar">
     <p class="warning-text">※本系統為個人自主開發，旨在優化查詢媒體露出流程與準確度，請勿用於非法行為😈</p>
-    <p class="warning-text">※已強化全網電子報擷查與撰文記者識別，並加入雙重檢核功能，精準過濾非相關新聞🌏</p>
+    <p class="warning-text">※已強化全網電子報巡查與撰文記者姓名識別，並加入雙重檢核功能，過濾非相關新聞🌏</p>
     <p class="warning-text">※檢索資料庫（database.csv）為「彰化家扶」常見出報媒體清單，開發者將不定期更新👀</p>
-    <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究🔧</p>
+    <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究⚠️</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -196,15 +180,6 @@ sidebar_option = st.sidebar.radio(
     index=0,
     label_visibility="collapsed",
 )
-
-st.sidebar.markdown("---")
-api_key = st.secrets.get("GEMINI_API_KEY", "")
-if not api_key:
-    api_key = st.sidebar.text_input(
-        "🔑 輸入 Gemini API Key:",
-        type="password",
-        help="請輸入您的 Gemini API Key",
-    )
 
 st.sidebar.markdown("---")
 db_file_path = "database.csv"
@@ -253,7 +228,7 @@ if os.path.exists(db_file_path):
         st.sidebar.error(f"❌ 讀取 database.csv 失敗: {e}")
 
 # ---------------------------------------------------------------------------
-# 5. 核心演算法：網頁擷取 + 全能記者探針 + 雙重篩選機制
+# 5. 核心演算法：網頁擷取 + 全能記者探針 + 彈性過濾機制
 # ---------------------------------------------------------------------------
 
 def fetch_article_text(url):
@@ -473,11 +448,11 @@ def trigger_5s_balloon_animation():
     balloons_html += '</div>'
     
     st.markdown(balloons_html, unsafe_allow_html=True)
-    st.balloons()  # Streamlit 原生氣球補強
+    st.balloons()
 
 
 def run_news_pipeline(
-    office, staff_name, org, keyword, year, media_map, db_domains, db_media_list, GEMINI_API_KEY
+    office, staff_name, org, keyword, year, media_map, db_domains, db_media_list
 ):
     # 記錄檢索歷史
     st.session_state["search_history"].append(
@@ -494,10 +469,10 @@ def run_news_pipeline(
     raw_results = []
 
     # -----------------------------------------------------------------------
-    # 第一階段：全網 Google 搜尋 「"機構名稱" "新聞關鍵字"」
+    # 建議1調鬆：去除過度嚴格的雙引號，改為開放性 Google 搜尋 (調高抓取量)
     # -----------------------------------------------------------------------
-    with st.spinner(f'🕷️ [階段一] 正在執行 Google 全網報導檢索：『"{org}" "{keyword}"』 (目標年份：{year})...'):
-        primary_query = f'"{org}" "{keyword}"'
+    with st.spinner(f'🕷️ [階段一] 正在執行 Google 全網報導檢索：『{org} {keyword}』 (目標年份：{year})...'):
+        primary_query = f'{org} {keyword}'
         raw_results = fetch_google_news_rss(primary_query, target_year=year)
 
     # -----------------------------------------------------------------------
@@ -509,17 +484,16 @@ def run_news_pipeline(
         fallback_progress = st.progress(0)
         fallback_status = st.empty()
         
-        # 以 db_media_list 或 db_domains 逐一/分批進行站內搜尋
         search_targets = db_media_list if db_media_list else [(f"站點{i}", d) for i, d in enumerate(db_domains)]
         total_targets = len(search_targets)
 
         for i, (m_name, dom) in enumerate(search_targets):
             pct = int((i + 1) / total_targets * 100)
-            # 修正處：將內部雙引號改為單引號或用斜線轉義
+            # 修正處：使用單引號避免 f-string 雙引號衝突崩潰
             fallback_status.markdown(f"🔎 正在站內搜索《{m_name}》 ({dom})：`site:{dom} '{org}' '{keyword}'`...")
             fallback_progress.progress(pct)
 
-            site_query = f'site:{dom} "{org}" "{keyword}"'
+            site_query = f'site:{dom} {org} {keyword}'
             site_res = fetch_google_news_rss(site_query, target_year=year)
             
             for res in site_res:
@@ -545,83 +519,40 @@ def run_news_pipeline(
         return []
 
     # -----------------------------------------------------------------------
-    # 第三階段：新聞內文抓取 + 雙重過濾 + 記者探針
+    # 第三階段：新聞內文抓取 + 彈性雙重過濾 + 記者探針 (建議2調鬆)
     # -----------------------------------------------------------------------
-    client = None
-    if genai and GEMINI_API_KEY:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-        except Exception:
-            pass
-
     results = []
     progress_text_slot = st.empty()
     progress_bar = st.progress(0)
     total_items = len(raw_results)
 
+    # 自動提煉簡稱探針 (如 "彰化家扶" -> "家扶")，防止因新聞寫簡稱而被誤刪
+    short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
+
     for i, item in enumerate(raw_results):
         percent = int((i + 1) / total_items * 100)
-        progress_text_slot.markdown(f"✈️ **新聞深度解析、雙重過濾與記者探針辨識中：{percent}%**")
+        progress_text_slot.markdown(f"✈️ **新聞深度解析、彈性過濾與記者探針辨識中：{percent}%**")
         progress_bar.progress(percent)
 
         cleaned_title = clean_title_local(item["title"])
         media_name = item["media_name"]
         m_type = lookup_media_type(media_name, media_map, item["url"])
 
-        # 1. 抓取新聞內文前段 (抓取內文解決自動搜尋抓不到/標題無關鍵字的問題)
+        # 1. 抓取新聞內文前段 (抓取內文解決標題過短漏抓的問題)
         article_snippet = fetch_article_text(item["url"])
         combined_text = f"標題：{item['title']}\n內文：{article_snippet}"
 
-        # 2. 嚴格雙重過濾 (標題或內文必須「同時包含」機構名稱與關鍵字，提升抓取精準度)
-        has_org = (org in cleaned_title) or (org in article_snippet)
+        # -------------------------------------------------------------------
+        # 建議2調鬆：允許「全稱」或「簡稱」符合，並兼顧關鍵字 (大幅避免漏抓)
+        # -------------------------------------------------------------------
+        has_org = (org in cleaned_title) or (org in article_snippet) or (short_org in cleaned_title) or (short_org in article_snippet)
         has_keyword = (keyword in cleaned_title) or (keyword in article_snippet)
 
         if not (has_org and has_keyword):
             continue
 
-        # 3. 執行全能記者探針 (支援 5 大常見署名型態)
+        # 2. 執行全能記者探針 (支援 5 大常見署名型態)
         reporter_name = reporter_detector_sensor(combined_text)
-
-        # 4. Gemini AI 輔助校準 (若 API 金鑰可用)
-        is_relevant = True
-        if client:
-            try:
-                st.session_state["api_count_today"] += 1
-                prompt = f"""
-                你是一個專業新聞輿情分析助手。請分析以下新聞內容：
-                {combined_text[:1500]}
-
-                請執行以下任務：
-                1. 判斷這篇新聞是否確實報導了「{org}」以及與「{keyword}」相關事件？ (填寫 true 或 false)
-                2. 清理新聞標題，去除媒體名稱或頻道後綴。
-                3. 精準辨識撰稿記者/作者姓名 (若內文無法辨識則填 '{reporter_name}')。
-
-                請傳回 JSON 格式：
-                {{"is_relevant": true, "title": "純標題", "reporter": "記者姓名"}}
-                """
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
-                    ),
-                )
-                
-                raw_json = response.text.strip()
-                if raw_json.startswith("```json"):
-                    raw_json = raw_json.split("```json")[1].split("```")[0].strip()
-                elif raw_json.startswith("```"):
-                    raw_json = raw_json.split("```")[1].split("```")[0].strip()
-
-                parsed = json.loads(raw_json)
-                is_relevant = parsed.get("is_relevant", True)
-                cleaned_title = parsed.get("title", cleaned_title)
-                reporter_name = parsed.get("reporter", reporter_name)
-            except Exception:
-                pass
-
-        if not is_relevant:
-            continue
 
         results.append(
             {
@@ -645,7 +576,7 @@ def run_news_pipeline(
 # ---------------------------------------------------------------------------
 if sidebar_option == "🔍 檢索系統":
     st.markdown('<div class="search-card">', unsafe_allow_html=True)
-    st.subheader("🔍 新聞輿情搜尋條件")
+    st.subheader("🔍 新聞搜尋條件")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -654,10 +585,10 @@ if sidebar_option == "🔍 檢索系統":
             ["全部", "和美兒童館", "員林服務處", "彰化服務處", "二林服務處", "田中服務處"],
         )
         org = st.text_input(
-            "🏛️ 搜尋機構名稱：", value="彰化家扶", placeholder="e.g. 彰化家扶"
+            "🏛️ 搜尋機構名稱：", value="", placeholder="e.g. 彰化家扶"
         )
         year_input = st.text_input(
-            "📅 目標年份：", value=str(datetime.date.today().year), placeholder=f"e.g. {datetime.date.today().year}"
+            "📅 目標年份：", value="", placeholder="e.g. 2026"
         )
 
     with col2:
@@ -682,14 +613,14 @@ if sidebar_option == "🔍 檢索系統":
             st.warning("⚠️ 請完整填寫「搜尋新聞關鍵字」與「主責同工姓名」！")
         else:
             final_data = run_news_pipeline(
-                office, staff_name.strip(), target_org, keyword.strip(), year, media_type_map, db_domains, db_media_list, api_key
+                office, staff_name.strip(), target_org, keyword.strip(), year, media_type_map, db_domains, db_media_list
             )
 
             if final_data:
                 df_result = pd.DataFrame(final_data)
                 df_result = df_result.drop_duplicates(subset=["新聞連結"])
 
-                st.success(f"🎉 成功捕捉到 {len(df_result)} 筆高品質相關新聞！")
+                st.success(f"🎉 成功捕捉到 {len(df_result)} 筆相關新聞報導！")
                 
                 # 🎈 觸發 5 秒升空氣球動畫
                 trigger_5s_balloon_animation()
@@ -716,44 +647,41 @@ if sidebar_option == "🔍 檢索系統":
                 st.info("ℹ️ 未能找到符合條件的新聞，或過濾後無相關結果。建議擴大關鍵字範圍試試！")
 
 elif sidebar_option == "💡 系統簡介":
-    st.subheader("💡 全網小報檢索系統特點")
+    st.subheader("💡 全網廣泛檢索系統")
     st.markdown(
         """
     **彰化家扶中心輿情自動檢索與報表生成系統**旨在幫助同工快速彙整網路媒體報導。
 
-    * **雙軌備援檢索**：先執行全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
-    * **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示 `📑已完成XX％` 進度條。
-    * **內文探針與雙重過濾**：自動爬取新聞內文前段，檢測標題與內文是否同時符合「機構名稱」與「關鍵字」，擺脫無關新聞。
-    * **全能記者署名識別**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等 5 大新聞署名格式。
-    * **互動視覺體驗**：完成擷取後自動發射 5 秒升空氣球動畫，增加系統活潑度與互動性。
+    * **全開放式彈性檢索**：移除死板的查詢框架，讓搜尋引擎能涵蓋「彰化家扶」、「家扶中心」等變體露出。
+    * **雙軌備援檢索**：先執行 Google 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
+    * **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度。
+    * **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
+    * **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等 5 大新聞署名格式。
+    * **無 API 依賴**：100% Python 演算法運行，防止觸發 Google 反爬蟲機制，並免除 API 配置與額度限制。
     """
     )
 
 elif sidebar_option == "📌 系統須知":
     st.subheader("📌 系統須知與使用規範")
-    st.success("※本版本已升級「站內備援檢索」、「內文雙重檢測」與「全能記者探針」，精準度全面提升📈")
+    st.success("※本系統已優化「搜尋條件放寬」、「簡稱彈性比對」與「記者姓名探針」，提升抓取量與精準度📈")
     st.warning(
         """
-    1. **使用規範**：本系統僅供彰化家扶內部輿情檢索使用，嚴禁用於商業爬蟲或任何非法用途！
-    2. **雙保險機制**：系統優先採用 Gemini Flash 模型與內文爬取；若網頁被 Google 防爬蟲機制阻擋或 API 額滿，會自動轉化為 Python 防爆演算。
-    3. **資料準確性**：報表匯出後，請務必人工進行二次核對，確保無遺漏。
-    4. **非網路新聞補充**：紙本報紙、電視新聞、廣播節目、社群新聞等露出請務必人工補充。
-    5. **報導存檔備查**：電子報或社群新聞請下載成PDF檔、YouTube露出下載成JPG檔，放置於查報資料夾中備查。
+    1. **使用規範**：本系統僅供彰化家扶內部輿情檢索使用，嚴禁用於商業爬蟲或任何非法用途🚫
+    2. **資料準確性**：報表匯出後，請務必人工進行二次核對，確保無遺漏✅
+    3. **非網路新聞補充**：紙本報紙、電視新聞、廣播節目、社群新聞等露出請務必人工補充✏️
+    4. **報導存檔備查**：電子報或社群新聞請下載成PDF檔、YouTube露出下載成JPG檔，放置於查報資料夾中備查📁
     """
     )
 
 elif sidebar_option == "🔐 系統管理員":
-    st.subheader("🔐 系統管理員後台")
+    st.subheader("🔐 系統管理員及開發者後台")
     admin_key = st.text_input("🔑 請輸入管理員金鑰：", type="password")
 
     if admin_key == "Automation_initiator114077":
         st.success("🔓 驗證成功，歡迎進入管理員後台！")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("📅 今日日期", str(st.session_state["last_api_date"]))
+        col_m1, col_m2 = st.columns(2)
+        col_m1.metric("📅 今日日期", str(datetime.date.today()))
         col_m2.metric(
-            "📡 今日 API 請求次數", f"{st.session_state['api_count_today']} 次"
-        )
-        col_m3.metric(
             "🔍 累積檢索次數", f"{len(st.session_state['search_history'])} 筆"
         )
 
