@@ -515,7 +515,8 @@ def run_news_pipeline(
 
         for i, (m_name, dom) in enumerate(search_targets):
             pct = int((i + 1) / total_targets * 100)
-            fallback_status.markdown(f"🔎 正在站內搜索《{m_name}》 ({dom})：`site:{dom} "{org}" "{keyword}"`...")
+            # 修正處：將內部雙引號改為單引號或用斜線轉義
+            fallback_status.markdown(f"🔎 正在站內搜索《{m_name}》 ({dom})：`site:{dom} '{org}' '{keyword}'`...")
             fallback_progress.progress(pct)
 
             site_query = f'site:{dom} "{org}" "{keyword}"'
