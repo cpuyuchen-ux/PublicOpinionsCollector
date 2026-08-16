@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# 1. 套件載入與環境防呆
+# 1. 套件載入與環境設定
 # ---------------------------------------------------------------------------
 try:
     from bs4 import BeautifulSoup
@@ -46,7 +46,7 @@ st.set_page_config(
 if "search_history" not in st.session_state:
     st.session_state["search_history"] = []
 
-# CSS 樣式
+# CSS 樣式與動畫
 st.markdown(
     """
 <style>
@@ -137,7 +137,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# 3. 核心工具：自動擷取 Domain
+# 3. 核心工具：擷取 Domain
 # ---------------------------------------------------------------------------
 
 def extract_domain(url_or_html):
@@ -219,11 +219,11 @@ if os.path.exists(db_file_path):
         st.sidebar.error(f"❌ 讀取 database.csv 失敗: {e}")
 
 # ---------------------------------------------------------------------------
-# 5. 核心重構：HTTP 追蹤重導向 / 記者探針 V3 / 併行多線程檢索
+# 5. 核心：重導向爬蟲 / 記者探針 V3 / 兩階段精準檢索管道
 # ---------------------------------------------------------------------------
 
 def fetch_article_data(url):
-    """取得新聞網頁內文，並解析 HTML Meta Tag 提取記者姓名與內文 (具備 301/302 跟隨重導向功能)"""
+    """取得新聞網頁內文與 Meta Tag 記者姓名 (支援跟隨 Google Redirect 網址)"""
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return "", ""
 
@@ -235,7 +235,6 @@ def fetch_article_data(url):
     
     try:
         req = urllib.request.Request(url, headers=headers)
-        # 使用 build_opener 確保能自動跟隨 Google News 重導向並取得最終目標網頁
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=ssl_context),
             urllib.request.HTTPRedirectHandler()
@@ -250,7 +249,6 @@ def fetch_article_data(url):
 
             soup = BeautifulSoup(html, "html.parser")
 
-            # 增強版 Meta Tag 記者辨識
             meta_reporter = ""
             meta_candidates = [
                 soup.find("meta", attrs={"name": re.compile(r"author|reporter|bnews:author|dnews:author", re.I)}),
@@ -273,7 +271,7 @@ def fetch_article_data(url):
 
 
 def reporter_detector_sensor_v3(article_text, meta_reporter=""):
-    """新聞記者探針 V3 (支援真實 DOM / Meta / 台灣媒體常見署名全格式)"""
+    """記者探針 V3：辨識台灣媒體常見署名"""
     if meta_reporter:
         clean_meta = re.sub(r"(記者|特派員|專題小組|編輯|責任編輯|\s+)", "", meta_reporter).strip()
         if 2 <= len(clean_meta) <= 4 and not re.search(r"(新聞|中心|即時|綜合|報導|頻道|社|網)", clean_meta):
@@ -285,25 +283,12 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
     clean_text = re.sub(r"\s+", " ", article_text).strip()
 
     patterns = [
-        # 1. 括號/方括號包覆 (記者張小明／彰化報導) / 〔記者李四/彰化報導〕 / 【記者王五/報導】
         r"[（\(〔\[【]\s*(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s\-_]*[\u4e00-\u9fa5]*\s*(?:報導|攝影|特稿|專訪)?\s*[）\)〕\]】]",
-        
-        # 2. 開頭帶「記者/特派記者」+ 姓名 + 地名/類別 + 報導
         r"(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*[\u4e00-\u9fa5]{2,6}\s*報導",
-        
-        # 3. 複合角色型：文／陳雅芳、圖／林明佑、撰文：張小明
         r"(?:文|圖|攝影|撰文|責任編輯|稿源)\s*[:：\/／]\s*([\u4e00-\u9fa5]{2,4})",
-        
-        # 4. 末尾/文末括號署名：(陳雅芳/彰化報導) 或 〔陳雅芳／報導〕
         r"[（\(〔\[]\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|地方|即時|綜合|生活|社會|報導)\s*[:：]?\s*(?:報導)?\s*[）\)〕\]]",
-        
-        # 5. 前 400 字無「記者」二字直接接地名報導 (例如：陳雅芳／彰化報導)
         r"([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|台中|台北|高雄|地方|即時|綜合|專題|生活)+\s*報導",
-        
-        # 6. 「【記者張小明/彰化報導】」獨立格式
         r"【\s*記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]",
-
-        # 7. 獨立「記者 姓名 報導」或 「記者 姓名/彰化專訪」
         r"(?:特派|攝影)?記者\s*([\u4e00-\u9fa5]{2,4})\s*(?:報導|專訪|隨筆)",
     ]
 
@@ -313,7 +298,6 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
         "公益", "台灣", "全國", "網路", "媒體", "業務", "客服", "版權", "所有"
     }
 
-    # 針對前 600 字進行比對，防止誤抓底部相關文章作者
     prefix_text = clean_text[:600]
 
     for pattern in patterns:
@@ -466,25 +450,24 @@ def trigger_5s_balloon_animation():
 
 
 def process_single_article(item, office, staff_name, org, keyword, media_map):
-    """處理單篇新聞的爬取、過濾與記者姓名探針分析"""
+    """處理單篇新聞的爬取與驗證，確保新聞內文/標題同時滿足 機構名稱 與 關鍵字"""
     cleaned_title = clean_title_local(item["title"])
     media_name = item["media_name"]
     m_type = lookup_media_type(media_name, media_map, item["url"])
 
-    # 爬取真實網頁與 Meta 記者標籤
+    # 擷取真實網頁與 Meta 標籤
     article_snippet, meta_reporter = fetch_article_data(item["url"])
     combined_text = f"標題：{item['title']}\n內文：{article_snippet}"
 
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
-    # 放寬比對條件：標題或內文含機構名（含簡稱）與關鍵字
-    has_org = (org in cleaned_title) or (org in article_snippet) or (short_org in cleaned_title) or (short_org in article_snippet) or ("家扶" in cleaned_title) or ("家扶" in article_snippet)
+    # 機構名稱與關鍵字雙重檢核
+    has_org = (org in cleaned_title) or (org in article_snippet) or (short_org in cleaned_title) or (short_org in article_snippet)
     has_keyword = (keyword in cleaned_title) or (keyword in article_snippet)
 
     if not (has_org and has_keyword):
         return None
 
-    # 執行升級版 V3 記者探針
     reporter_name = reporter_detector_sensor_v3(combined_text, meta_reporter)
 
     return {
@@ -515,23 +498,29 @@ def run_news_pipeline(
     raw_results = []
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
-    # 擴充查詢語句，翻倍增加 Google RSS 出報覆蓋率
-    expanded_queries = [
-        f'{org} {keyword}',
-        f'{short_org} {keyword}',
-        f'彰化家扶 {keyword}',
-        f'"{keyword}" 家扶',
+    # =================================================----------------------
+    # 📌 第一階段：Google 搜尋引擎全網廣泛檢索 (依「(搜尋機構名稱)(搜尋新聞關鍵字)」邏輯)
+    # =================================================----------------------
+    first_stage_queries = [
+        f'"{org}" "{keyword}"',              # 完整精準匹配，例如: "彰化家扶中心" "課輔班"
+        f'{org} {keyword}',                  # 標準邏輯，例如: 彰化家扶中心 課輔班
+        f'{short_org} {keyword}',            # 機構簡稱邏輯，例如: 家扶 課輔班
     ]
+    
+    # 去除重複 Query
+    first_stage_queries = list(set(first_stage_queries))
 
-    # 第一階段：Google News 多重 Query 擴充抓取
-    with st.spinner(f'🕷️ [階段一] 正在執行 Google 全網廣泛新聞檢索 (目標年份：{year})...'):
-        for q in list(set(expanded_queries)):
+    with st.spinner(f'🕷️ [第一階段] 正在依「({org}) ({keyword})」進行 Google 全網廣泛檢索 (目標年份：{year})...'):
+        for q in first_stage_queries:
             res = fetch_google_news_rss(q, target_year=year)
             raw_results.extend(res)
 
-    # 第二階段：站內與高轉載平台檢索
-    st.info("🔎 [階段二] 正在為 database.csv 媒體與高轉載平台執行站內二次檢索...")
+    # =================================================----------------------
+    # 📌 第二階段：針對 database.csv 內容進行站內檢索 (依 site:(domain) (搜尋機構名稱) (搜尋新聞關鍵字) 邏輯)
+    # =================================================----------------------
+    st.info("🔎 [第二階段] 正在針對 database.csv 內容進行媒體站內檢索...")
     
+    # 整合高轉載平台與 database.csv 中的媒體 domain
     mandatory_targets = [
         ("奧丁丁新聞", "owlting.com"),
         ("PChome新聞", "pchome.com.tw"),
@@ -558,6 +547,7 @@ def run_news_pipeline(
         fallback_status.markdown(f"🔎 深度巡查《{m_name}》 (`site:{dom}`)...")
         fallback_progress.progress(pct)
 
+        # 嚴格遵循 「site:domain (搜尋機構名稱) (搜尋新聞關鍵字)」 邏輯
         site_query = f'site:{dom} {org} {keyword}'
         site_res = fetch_google_news_rss(site_query, target_year=year)
         
@@ -568,7 +558,7 @@ def run_news_pipeline(
     fallback_progress.empty()
     fallback_status.empty()
 
-    # 僅針對相同 URL 進行網址去重
+    # 僅針對相同 URL 進行網址去重，完整保留轉載新聞
     unique_raw = []
     seen_urls = set()
     for r in raw_results:
@@ -578,19 +568,20 @@ def run_news_pipeline(
     raw_results = unique_raw
 
     if not raw_results:
-        st.error("❌ 經全網與媒體站內二次檢索後，仍未抓取到相關報導，請檢查關鍵字或年份設定。")
+        st.error("❌ 經兩階段檢索後，仍未抓取到相關報導，請檢查關鍵字或目標年份設定。")
         return []
 
-    # 第三階段：多執行緒併行網頁抓取 + 記者姓名探針
+    # =================================================----------------------
+    # 📌 第三階段：多線程併行網頁解析與記者探針辨識
+    # =================================================----------------------
     results = []
     progress_text_slot = st.empty()
     progress_bar = st.progress(0)
     total_items = len(raw_results)
 
-    st.info("✈️ [階段三] 啟用併行多執行緒解析內文與記者姓名探針...")
+    st.info("✈️ [第三階段] 啟用多線程併行解析網頁與記者姓名探針...")
 
     completed = 0
-    # 採用 10 線程併行處理網頁請求，提升抓取速度與穩定度
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_item = {
             executor.submit(process_single_article, item, office, staff_name, org, keyword, media_map): item 
@@ -612,7 +603,7 @@ def run_news_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# 6. UI 與主流程控制
+# 6. UI 介面與主流程控制
 # ---------------------------------------------------------------------------
 if sidebar_option == "🔍 檢索系統":
     st.markdown('<div class="search-card">', unsafe_allow_html=True)
@@ -702,7 +693,7 @@ elif sidebar_option == "💡 系統簡介":
 
 elif sidebar_option == "📌 系統須知":
     st.subheader("📌 系統須知與使用規範")
-    st.success("※本系統已優化「搜尋條件放寬」、「簡稱彈性比對」與「記者姓名探針 V3」，提升抓取量與精準度📈")
+    st.success("※本系統已優化「兩階段精準檢索」、「簡稱彈性比對」與「記者姓名探針 V3」，提升抓取量與精準度📈")
     st.warning(
         """
     1. **使用規範**：本系統僅供彰化家扶內部輿情檢索使用，嚴禁用於商業爬蟲或任何非法用途🚫
