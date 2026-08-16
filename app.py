@@ -122,7 +122,7 @@ st.markdown(
 # 2. 標題與警示區塊
 # ---------------------------------------------------------------------------
 st.markdown('<div class="main-header">📰 彰化家扶中心輿情自動檢索與報表生成系統</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">雙軌真實站內巡查機制｜多線程網頁解析與記者探針 V3｜僅網址完全相同時去重</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">雙軌真實站內巡查機制｜多線程網頁解析與記者探針｜僅網址完全相同時去重</div>', unsafe_allow_html=True)
 
 st.markdown(
     """
