@@ -162,7 +162,7 @@ def extract_domain(url_or_html):
     return domain.lower()
 
 # ---------------------------------------------------------------------------
-# 4. 側邊欄與 database.csv 讀取
+# 4. 側邊欄與 database.csv 完整讀取
 # ---------------------------------------------------------------------------
 st.sidebar.title("⚙️ 系統功能導覽")
 sidebar_option = st.sidebar.radio(
@@ -175,7 +175,7 @@ sidebar_option = st.sidebar.radio(
 st.sidebar.markdown("---")
 db_file_path = "database.csv"
 media_type_map = {}
-db_media_targets = []  # 儲存 (媒體名稱, 網域/無網域標示)
+csv_media_list = []  # 保存 CSV 裡面讀到的每一筆 (媒體名稱, 網域)
 
 if os.path.exists(db_file_path):
     try:
@@ -194,35 +194,37 @@ if os.path.exists(db_file_path):
             for idx, row in db_df.iterrows():
                 m_name = str(row[media_col]).strip()
                 m_type = str(row[type_col]).strip() if len(db_df.columns) >= 2 else "非三大報全國性"
-                media_type_map[m_name] = m_type
+                
+                if m_name and m_name.lower() != "nan":
+                    media_type_map[m_name] = m_type
 
-                possible_url_or_html = ""
-                if len(row) >= 3 and pd.notna(row.iloc[2]):
-                    possible_url_or_html = str(row.iloc[2])
-                elif "." in m_name:
-                    possible_url_or_html = m_name
+                    possible_url_or_html = ""
+                    if len(row) >= 3 and pd.notna(row.iloc[2]):
+                        possible_url_or_html = str(row.iloc[2])
+                    elif "." in m_name:
+                        possible_url_or_html = m_name
 
-                clean_dom = extract_domain(possible_url_or_html)
-                if clean_dom:
-                    media_type_map[clean_dom] = m_type
-                    db_media_targets.append((m_name, clean_dom))
-                else:
-                    db_media_targets.append((m_name, ""))
+                    clean_dom = extract_domain(possible_url_or_html)
+                    if clean_dom:
+                        media_type_map[clean_dom] = m_type
+                    
+                    # 無論有沒有網域，都強制記錄下來
+                    csv_media_list.append((m_name, clean_dom))
 
                 pct = int((idx + 1) / total_rows * 100)
                 domain_progress_bar.progress(pct)
                 domain_status_text.markdown(f"📑已完成 **{pct}％**")
 
-            domain_status_text.markdown(f"📑已完成 **100％** (已載入 {len(db_media_targets)} 家媒體)")
+            domain_status_text.markdown(f"📑已載入 CSV 內 **{len(csv_media_list)}** 家媒體目標")
     except Exception as e:
         st.sidebar.error(f"❌ 讀取 database.csv 失敗: {e}")
 
 # ---------------------------------------------------------------------------
-# 5. 核心：重導向爬蟲 / 記者探針 V3 / 兩階段精準檢索管道
+# 5. 核心：重導向爬蟲 / 記者探針 V3 / 雙軌強迫檢索
 # ---------------------------------------------------------------------------
 
 def fetch_article_data(url):
-    """取得新聞網頁內文與 Meta Tag 記者姓名 (支援跟隨 Google Redirect 網址)"""
+    """取得新聞網頁內文與 Meta Tag 記者姓名"""
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return "", ""
 
@@ -309,14 +311,14 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
     return "編輯部"
 
 
-def parse_media_from_url_or_title(title, url, source_elem_text=None):
-    title = str(title) if title else ""
-    url = str(url) if url else ""
-
+def parse_media_from_url_or_title(title, url, source_elem_text=None, default_media=""):
+    """解析媒體名稱，優先使用預設傳入的媒體名稱"""
     if source_elem_text and str(source_elem_text).strip():
         return str(source_elem_text).strip()
 
-    # 擴充全台常規與地方轉載媒體網域地圖
+    title = str(title) if title else ""
+    url = str(url) if url else ""
+
     domain_map = {
         "owlting.com": "奧丁丁新聞", "886.news": "警政時報", "taichung.news": "台中時報",
         "nantoutimes.com": "南投時報", "pingtungtimes.com.tw": "屏東時報", "taipeipost.org": "台北郵報",
@@ -350,7 +352,7 @@ def parse_media_from_url_or_title(title, url, source_elem_text=None):
     except Exception:
         pass
 
-    return "地方網路新聞"
+    return default_media if default_media else "地方網路新聞"
 
 
 def parse_pub_year(pub_date_str):
@@ -366,7 +368,7 @@ def parse_pub_year(pub_date_str):
     return None
 
 
-def fetch_google_news_rss(query, target_year=None):
+def fetch_google_news_rss(query, target_year=None, default_media=""):
     results = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -394,7 +396,7 @@ def fetch_google_news_rss(query, target_year=None):
                         continue
 
                 if title and link:
-                    media_name = parse_media_from_url_or_title(title, link, source_text)
+                    media_name = parse_media_from_url_or_title(title, link, source_text, default_media)
                     results.append(
                         {
                             "title": title,
@@ -486,7 +488,7 @@ def process_single_article(item, office, staff_name, org, keyword, media_map):
 
 
 def run_news_pipeline(
-    office, staff_name, org, keyword, year, media_map, db_media_targets
+    office, staff_name, org, keyword, year, media_map, csv_media_list
 ):
     st.session_state["search_history"].append(
         {
@@ -503,28 +505,26 @@ def run_news_pipeline(
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
     # =================================================----------------------
-    # 📌 第一階段：Google 搜尋引擎多組合全網廣泛檢索
+    # 📌 第一階段：全網廣泛關鍵字掃描
     # =================================================----------------------
     first_stage_queries = [
         f'"{org}" "{keyword}"',             
         f'{org} {keyword}',                 
         f'{short_org} {keyword}',            
         f'彰化家扶 {keyword}',
-        f'家扶中心 {keyword}',
     ]
-    first_stage_queries = list(set(first_stage_queries))
 
-    with st.spinner(f'🕷️ [第一階段] 正在依「({org}) ({keyword})」進行多組全網廣泛檢索 (目標年份：{year})...'):
+    with st.spinner(f'🕷️ [第一階段] 正在依「({org}) ({keyword})」進行全網廣泛檢索 (目標年份：{year})...'):
         for q in first_stage_queries:
             res = fetch_google_news_rss(q, target_year=year)
             raw_results.extend(res)
 
     # =================================================----------------------
-    # 📌 第二階段：針對 database.csv 與重點媒體進行雙軌巡查 (site:domain 或 媒體名稱+機構+關鍵字)
+    # 📌 第二階段：【100% 強制巡查】database.csv 內的每一家媒體
     # =================================================----------------------
-    st.info("🔎 [第二階段] 正在對 database.csv 媒體清單進行深度定點檢索...")
+    st.info("🔎 [第二階段] 正在對 database.csv 內的媒體進行 100% 逐一專屬強迫巡查...")
     
-    # 強制預設重點轉載媒體與資料庫融合
+    # 預設重點轉載媒體與 CSV 目標融合
     mandatory_targets = [
         ("奧丁丁新聞", "owlting.com"), ("PChome新聞", "pchome.com.tw"),
         ("Yahoo奇摩新聞", "yahoo.com"), ("蕃新聞", "yam.com"),
@@ -538,41 +538,45 @@ def run_news_pipeline(
         ("商傳媒", "commerce.media"), ("火報", "firenews.com.tw")
     ]
     
-    all_targets = mandatory_targets + (db_media_targets if db_media_targets else [])
+    # 聯集：確保所有 mandatory 與 CSV 內的媒體都被納入
+    all_targets = mandatory_targets + (csv_media_list if csv_media_list else [])
     
-    seen_keys = set()
-    unique_search_targets = []
+    # 依「媒體名稱」去重，確保不重複搜尋
+    unique_search_targets = {}
     for m, d in all_targets:
-        key = f"{m}_{d}"
-        if key not in seen_keys and m != "":
-            seen_keys.add(key)
-            unique_search_targets.append((m, d))
+        m_clean = m.strip()
+        if m_clean and m_clean not in unique_search_targets:
+            unique_search_targets[m_clean] = d
 
     fallback_progress = st.progress(0)
     fallback_status = st.empty()
     total_targets = len(unique_search_targets)
 
-    for i, (m_name, dom) in enumerate(unique_search_targets):
+    for i, (m_name, dom) in enumerate(unique_search_targets.items()):
         pct = int((i + 1) / total_targets * 100)
-        fallback_status.markdown(f"🔎 深度巡查《{m_name}》...")
+        fallback_status.markdown(f"🔎 深度對點巡查：《**{m_name}**》 ({i+1}/{total_targets})...")
         fallback_progress.progress(pct)
 
         site_res = []
-        # 1. 具網域者使用 site: 搜尋
+
+        # 法一：如果有網域，優先執行 site: 網域搜尋
         if dom:
             site_query = f'site:{dom} {org} {keyword}'
-            site_res = fetch_google_news_rss(site_query, target_year=year)
-        
-        # 2. 無網域或 site: 無結果者，補上「(媒體名稱) (機構) (關鍵字)」強迫精準搜出
+            site_res = fetch_google_news_rss(site_query, target_year=year, default_media=m_name)
+
+        # 法二：如果無網域，或 site: 無結果，【強制】使用 "媒體名稱" + "機構" + "關鍵字" 進行點對點撈取
         if not site_res:
             name_query = f'"{m_name}" "{org}" "{keyword}"'
-            site_res = fetch_google_news_rss(name_query, target_year=year)
+            site_res = fetch_google_news_rss(name_query, target_year=year, default_media=m_name)
+            
+            # 備用放寬法
             if not site_res:
                 name_query_soft = f'{m_name} {short_org} {keyword}'
-                site_res = fetch_google_news_rss(name_query_soft, target_year=year)
+                site_res = fetch_google_news_rss(name_query_soft, target_year=year, default_media=m_name)
 
         for res in site_res:
-            res["media_name"] = m_name if m_name else res["media_name"]
+            # 強制矯正媒體名稱，防止被誤判成「地方網路新聞」
+            res["media_name"] = m_name
             raw_results.append(res)
 
     fallback_progress.empty()
@@ -664,7 +668,7 @@ if sidebar_option == "🔍 檢索系統":
             st.warning("⚠️ 請完整填寫「搜尋新聞關鍵字」與「主責同工姓名」！")
         else:
             final_data = run_news_pipeline(
-                office, staff_name.strip(), target_org, keyword.strip(), year, media_type_map, db_media_targets
+                office, staff_name.strip(), target_org, keyword.strip(), year, media_type_map, csv_media_list
             )
 
             if final_data:
@@ -703,11 +707,11 @@ elif sidebar_option == "💡 系統簡介":
     **彰化家扶中心輿情自動檢索與報表生成系統**旨在幫助同工快速彙整網路媒體報導。
 
     1. **全開放式彈性檢索**：移除死板的查詢框架，讓搜尋引擎能涵蓋「彰化家扶」、「家扶中心」等變體露出。
-    2. **雙軌備援檢索**：先執行 Google 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
-    3. **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度。
+    2. **雙軌強迫檢索**：先執行全網廣泛搜尋，再**100% 強制巡查 `database.csv` 內的每一家媒體**，絕不遺漏。
+    3. **網域與媒體名稱雙解析**：即便 CSV 無提供網域，也能透過媒體名稱強迫點對點精準搜尋。
     4. **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
     5. **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等常見新聞署名格式。
-    6. **無 API 依賴防爆機制**：100% Python 運算，防止觸發 Google 反爬蟲機制（Anti-bot protection），並免除 API 配置與額度限制。
+    6. **無 API 依賴防爆機制**：100% Python 運算，防止觸發 Google 反爬蟲機制，並免除 API 配置與額度限制。
     """
     )
 
