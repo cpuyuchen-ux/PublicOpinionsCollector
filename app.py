@@ -121,15 +121,18 @@ st.markdown(
 # 2. 標題與警示區塊
 # ---------------------------------------------------------------------------
 st.markdown('<div class="main-header">📰 彰化家扶中心輿情自動檢索與報表生成系統</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">支援多重轉載媒體深層檢索、極致記者辨識與完整原始出處保留</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">支援多重轉載媒體檢索，可辨識記者姓名，並且不進行去重</div>', unsafe_allow_html=True)
 
 st.markdown(
     """
 <div class="warning-bar">
     <p class="warning-text">※本系統為個人自主開發，旨在優化查詢媒體露出流程與準確度，請勿用於非法行為😈</p>
-    <p class="warning-text">※已強化「奧丁丁、PChome、奇摩、蕃新聞」等轉載大宗網站站內巡查機制🌏</p>
-    <p class="warning-text">※同網站同標題但網址不同（不同來源/露出）將完整保留，不進行強制去重，確保統計完整👀</p>
+    <p class="warning-text">※已強化全網電子報巡查與撰文記者姓名識別，並加入雙重檢核功能，過濾非相關新聞🌏</p>
+    <p class="warning-text">※檢索資料庫（database.csv）為「彰化家扶」常見出報媒體清單，開發者將不定期更新👀</p>
+    <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究⚠️</p>
+
 </div>
+
 """,
     unsafe_allow_html=True,
 )
@@ -256,7 +259,7 @@ def fetch_article_data(url):
 
 
 def reporter_detector_sensor_v2(article_text, meta_reporter=""):
-    """高精度新聞記者探針 V2 (支援 Meta 標籤 + 8 大常見署名型態)"""
+    """新聞記者探針 V2 (支援 Meta 標籤 + 8 大常見署名型態)"""
     if meta_reporter and 2 <= len(meta_reporter) <= 5 and not re.search(r"新聞|編輯|中心|即時", meta_reporter):
         return meta_reporter
 
@@ -467,7 +470,7 @@ def run_news_pipeline(
         raw_results = fetch_google_news_rss(primary_query, target_year=year)
 
     # 第二階段：強制對 CSV 清單與四大轉載平台執行深層站內檢索 (owlting, pchome, yahoo, yam)
-    st.info("🔎 [階段二] 正在為 database.csv 媒體與高轉載平台 (奧丁丁/PChome/奇摩/蕃新聞) 執行站內深度二次檢索...")
+    st.info("🔎 [階段二] 正在為 database.csv 媒體與高轉載平台執行站內二次檢索...")
     
     # 建立多重站內檢索目標（含四大轉載平台與 database.csv）
     mandatory_targets = [
@@ -655,16 +658,18 @@ elif sidebar_option == "💡 系統簡介":
         """
     **彰化家扶中心輿情自動檢索與報表生成系統**旨在幫助同工快速彙整網路媒體報導。
 
-    * **雙軌站內巡查機制**：整合全網查詢與 `database.csv` + 強制巡查奧丁丁、PChome、奇摩、蕃新聞等各大轉載網站。
-    * **完整出處保留**：同網站不同 URL 即使標題相同亦不會被誤刪，確保轉載與原始出處統計不遺漏。
-    * **升級版記者探針 (Sensor V2)**：支援 HTML Meta 標籤與 8 種新聞署名格式解析，大幅降低「編輯部」出現率。
-    * **無 API 依賴**：100% Python 演算法運行，防止觸發 Google 反爬蟲機制，並免除 API 配置與額度限制。
+    1. **全開放式彈性檢索**：移除死板的查詢框架，讓搜尋引擎能涵蓋「彰化家扶」、「家扶中心」等變體露出。
+    2. **雙軌備援檢索**：先執行 Google 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
+    3. **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度。
+    4. **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
+    5. **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等常見新聞署名格式。
+    6. **無 API 依賴防爆機制**：100% Python 運算，防止觸發 Google 反爬蟲機制（Anti-bot protection），並免除 API 配置與額度限制。
     """
     )
 
 elif sidebar_option == "📌 系統須知":
     st.subheader("📌 系統須知與使用規範")
-    st.success("※本系統已優化「奧丁丁、PChome、奇摩新聞站內巡查」與「完整出處保留」📈")
+    st.success("※本系統已優化「搜尋條件放寬」、「簡稱彈性比對」與「記者姓名探針」，提升抓取量與精準度📈")
     st.warning(
         """
     1. **使用規範**：本系統僅供彰化家扶內部輿情檢索使用，嚴禁用於商業爬蟲或任何非法用途🚫
