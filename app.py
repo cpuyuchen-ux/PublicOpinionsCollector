@@ -363,7 +363,7 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
     return results
 
 # ---------------------------------------------------------------------------
-# 6. 第三階段：網頁解析與記者姓名探針 V3
+# 6. 第三階段：網頁解析與記者姓名探針 V3 (優化版)
 # ---------------------------------------------------------------------------
 
 def fetch_article_data(url):
@@ -393,7 +393,7 @@ def fetch_article_data(url):
 
             meta_reporter = ""
             meta_candidates = [
-                soup.find("meta", attrs={"name": re.compile(r"author|reporter|bnews:author", re.I)}),
+                soup.find("meta", attrs={"name": re.compile(r"author|reporter|bnews:author|dable:author", re.I)}),
                 soup.find("meta", attrs={"property": re.compile(r"author|article:author|og:article:author", re.I)}),
             ]
             for meta in meta_candidates:
@@ -406,44 +406,56 @@ def fetch_article_data(url):
 
             text = soup.get_text(separator=" ")
             clean_text = re.sub(r"\s+", " ", text).strip()
-            return clean_text[:3500], meta_reporter
+            return clean_text[:4000], meta_reporter
     except Exception:
         return "", ""
 
 
 def reporter_detector_sensor_v3(article_text, meta_reporter=""):
-    """記者探針 V3：演算法辨識記者姓名"""
+    """記者探針 V3：演算法優化辨識記者姓名"""
+    exclude_words = {
+        "彰化", "台中", "台北", "地方", "即時", "綜合", "專題", "社會", "生活",
+        "新聞", "家扶", "中心", "本報", "特別", "責任", "編輯", "焦點", "總會", "報導", "公益",
+        "記者", "特派", "實習", "攝影", "駐地", "文字", "撰文", "稿源", "照片", "翻攝", "提供",
+        "社", "網", "頻道", "報導", "小組", "中心"
+    }
+
+    # 1. 優先檢查 Meta 標籤
     if meta_reporter:
-        clean_meta = re.sub(r"(記者|特派員|專題小組|編輯|責任編輯|\s+)", "", meta_reporter).strip()
-        if 2 <= len(clean_meta) <= 4 and not re.search(r"(新聞|中心|即時|綜合|報導|頻道|社|網)", clean_meta):
-            return clean_meta
+        clean_meta = re.sub(r"(記者|特派員|專題小組|編輯|責任編輯|撰文|\s+)", "", meta_reporter).strip()
+        if 2 <= len(clean_meta) <= 4 and clean_meta not in exclude_words:
+            if not re.search(r"(新聞|中心|即時|綜合|報導|頻道|社|網|特稿)", clean_meta):
+                return clean_meta
 
     if not article_text:
         return "編輯部"
 
     clean_text = re.sub(r"\s+", " ", article_text).strip()
 
+    # 2. 強化 Regex 正規表達式清單 (包含多種臺灣常見新聞開頭與結尾署名格式)
     patterns = [
-        r"[（\(〔\[【]\s*(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s\-_]*[\u4e00-\u9fa5]*\s*(?:報導|攝影|特稿|專訪)?\s*[）\)〕\]】]",
-        r"(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*[\u4e00-\u9fa5]{2,6}\s*報導",
-        r"(?:文|圖|攝影|撰文|責任編輯|稿源)\s*[:：\/／]\s*([\u4e00-\u9fa5]{2,4})",
+        r"[（\(〔\[【]\s*(?:特派|實習|攝影|駐地|專題)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s\-_]*[\u4e00-\u9fa5]*\s*(?:報導|攝影|特稿|專訪)?\s*[）\)〕\]】]",
+        r"(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*[\u4e00-\u9fa5]{2,6}\s*(?:報導|特別報導)",
+        r"(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\s/／—–-]\s*(?:彰化|台中|台北|高雄|地方|即時|綜合|生活|社會)?\s*(?:報導|電)",
+        r"(?:圖文|文|圖|攝影|撰文|責任編輯|稿源|新聞稿)\s*[:：\/／]\s*([\u4e00-\u9fa5]{2,4})",
         r"[（\(〔\[]\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|地方|即時|綜合|生活|社會|報導)\s*[:：]?\s*(?:報導)?\s*[）\)〕\]]",
         r"([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|台中|台北|高雄|地方|即時|綜合|專題|生活)+\s*報導",
     ]
 
-    exclude_words = {
-        "彰化", "台中", "台北", "地方", "即時", "綜合", "專題", "社會", "生活",
-        "新聞", "家扶", "中心", "本報", "特別", "責任", "編輯", "焦點", "總會", "報導", "公益"
-    }
+    # 取內文前 800 字與最後 500 字進行針對性探針（記者名多出現在前後端）
+    prefix_text = clean_text[:800]
+    suffix_text = clean_text[-500:] if len(clean_text) > 800 else ""
+    target_texts = [prefix_text, suffix_text]
 
-    prefix_text = clean_text[:600]
-
-    for pattern in patterns:
-        matches = re.finditer(pattern, prefix_text)
-        for match in matches:
-            reporter_name = match.group(1).strip()
-            if 2 <= len(reporter_name) <= 4 and reporter_name not in exclude_words:
-                return reporter_name
+    for target in target_texts:
+        if not target:
+            continue
+        for pattern in patterns:
+            matches = re.finditer(pattern, target)
+            for match in matches:
+                reporter_name = match.group(1).strip()
+                if 2 <= len(reporter_name) <= 4 and reporter_name not in exclude_words:
+                    return reporter_name
 
     return "編輯部"
 
@@ -458,7 +470,7 @@ def process_single_article(item, office, staff_name, org, keyword, media_map):
 
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
-    # 機構名稱與關鍵字雙重校驗 (修正：增加標題優先寬鬆判定，避免動態網頁如 OwlNews 爬不到內文時被錯誤丟棄)
+    # 機構名稱與關鍵字雙重校驗
     has_org = (org in clean_title) or (org in article_snippet) or (short_org in clean_title) or (short_org in article_snippet)
     has_keyword = (keyword in clean_title) or (keyword in article_snippet)
 
@@ -468,6 +480,7 @@ def process_single_article(item, office, staff_name, org, keyword, media_map):
     if not (title_valid or (has_org and has_keyword)):
         return None
 
+    # 將內文與 meta_reporter 丟入探針
     reporter_name = reporter_detector_sensor_v3(combined_text, meta_reporter)
 
     # 確定媒體類別
@@ -515,7 +528,7 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
     all_raw_articles = []
 
     # =================================================----------------------
-    # 📌 第一階段：全網搜索引擎檢索 (修正：移除引號，改為標準空格查詢，提升 OwlNews 等多媒體曝光)
+    # 📌 第一階段：全網搜索引擎檢索
     # =================================================----------------------
     st.info(f'🔎 [第一階段] 正在以 Google 搜索引擎抓取：「({org}) ({keyword})」全網報導...')
     google_query = f'{org} {keyword}'
@@ -524,7 +537,7 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
     st.markdown(f"👉 **第一階段抓取到 {len(stage1_results)} 筆報導**")
 
     # =================================================----------------------
-    # 📌 第二階段：利用 database.csv 逐一進入檔案內紀錄的網站依「(搜尋機構名稱)(搜尋新聞關鍵字)」站內搜尋
+    # 📌 第二階段：利用 database.csv 逐一進行站內巡查
     # =================================================----------------------
     st.info(f'📑 [第二階段] 正在依據 database.csv 逐一進入錄入網站，進行「({org}) ({keyword})」站內巡查...')
 
@@ -563,7 +576,7 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
         return []
 
     # =================================================----------------------
-    # 📌 第三階段：啟用多線程併行解析網頁與記者姓名探針...
+    # 📌 第三階段：啟用多線程併行解析網頁與記者姓名探針
     # =================================================----------------------
     st.info("✈️ [第三階段] 啟用多線程併行解析網頁與記者姓名探針...")
 
@@ -675,15 +688,15 @@ elif sidebar_option == "💡 系統簡介":
     **彰化家扶中心輿情自動檢索與報表生成系統**旨在幫助同工快速彙整網路媒體報導。
 
     1. **全開放式彈性檢索**：移除死板的查詢框架，讓搜尋引擎能涵蓋「彰化家扶」、「家扶中心」等變體露出。
-    2. **雙軌備援檢索**：先執行 Google 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
-    3. **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度。
-    4. **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
+    2. **雙軌備援檢索**：先執行 Google RSS 全網搜尋，若無結果則自動進入 `database.csv` 媒體清單進行 `site:` 站內搜尋。
+    3. **網域自動轉換與進度顯示**：自動解析 HTML 或網址轉為純 Domain，並即時顯示轉換進度，降低使用者等待焦慮。
+    4. **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，防止漏抓新聞。
     5. **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等常見新聞署名格式。
     6. **無 API 依賴防爆機制**：100% Python 運算，防止觸發 Google 反爬蟲機制（Anti-bot protection），並免除 API 配置與額度限制。
     7. **第一階段（Google全網）**：以全網搜尋引擎抓取「(搜尋機構名稱)(搜尋新聞關鍵字)」報導。
-    8. **第二階段（CSV真實站內巡查）**：利用 `database.csv` 紀錄的每一家媒體與網站，進行專屬站內檢索。
-    9. **第三階段（多線程解析）**：啟用多線程併行解析網頁內文與記者姓名探針 V3。
-    10. **絕不去重原則**：除非兩筆報導的 URL 網址完全相同，否則保留所有轉載與多方報導！
+    8. **第二階段（CSV真實站內巡查）**：利用 `database.csv` 內的每一家媒體與網站，進行專屬站內檢索。
+    9. **第三階段（多線程解析）**：啟用多線程併行解析網頁內文與記者姓名探針。
+    10. **絕對不去重原則**：除非兩筆報導的 URL 網址完全相同，否則保留所有轉載與多方報導！
     """
     )
 
