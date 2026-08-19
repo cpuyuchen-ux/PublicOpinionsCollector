@@ -304,8 +304,8 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     }
 
-    # 1. 如果有網域，發起點對點強迫搜尋 (Direct Site Query)
-    site_query = f"site:{domain} {search_term}" if domain else f'"{media_name}" {search_term}'
+    # 1. 如果有網域，發起點對點強迫搜尋 (Direct Site Query)，移除過於嚴格的強迫雙引號
+    site_query = f"site:{domain} {search_term}" if domain else f'{media_name} {search_term}'
     encoded_query = urllib.parse.quote(site_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
 
@@ -458,11 +458,14 @@ def process_single_article(item, office, staff_name, org, keyword, media_map):
 
     short_org = org.replace("彰化", "").replace("中心", "") if "家扶" in org else org
 
-    # 機構名稱與關鍵字雙重校驗
+    # 機構名稱與關鍵字雙重校驗 (修正：增加標題優先寬鬆判定，避免動態網頁如 OwlNews 爬不到內文時被錯誤丟棄)
     has_org = (org in clean_title) or (org in article_snippet) or (short_org in clean_title) or (short_org in article_snippet)
     has_keyword = (keyword in clean_title) or (keyword in article_snippet)
 
-    if not (has_org and has_keyword):
+    # 只要標題同時包含機構（或簡稱）與關鍵字，即使動態網頁內文爬取失敗也予以保留
+    title_valid = ((org in clean_title) or (short_org in clean_title)) and (keyword in clean_title)
+
+    if not (title_valid or (has_org and has_keyword)):
         return None
 
     reporter_name = reporter_detector_sensor_v3(combined_text, meta_reporter)
@@ -512,10 +515,10 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
     all_raw_articles = []
 
     # =================================================----------------------
-    # 📌 第一階段：全網搜索引擎檢索
+    # 📌 第一階段：全網搜索引擎檢索 (修正：移除引號，改為標準空格查詢，提升 OwlNews 等多媒體曝光)
     # =================================================----------------------
     st.info(f'🔎 [第一階段] 正在以 Google 搜索引擎抓取：「({org}) ({keyword})」全網報導...')
-    google_query = f'"{org}" "{keyword}"'
+    google_query = f'{org} {keyword}'
     stage1_results = fetch_google_news_rss(google_query, target_year=year)
     all_raw_articles.extend(stage1_results)
     st.markdown(f"👉 **第一階段抓取到 {len(stage1_results)} 筆報導**")
