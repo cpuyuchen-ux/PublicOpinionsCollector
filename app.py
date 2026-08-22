@@ -122,13 +122,13 @@ st.markdown(
 # 2. 標題與警示區塊
 # ---------------------------------------------------------------------------
 st.markdown('<div class="main-header">📰 彰化家扶中心輿情自動檢索與報表生成系統</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">雙軌真實站內巡查機制｜多線程網頁解析與記者探針｜僅網址完全相同時去重</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">雙軌站內巡查機制｜多線程網頁解析｜網址完全相同時去重</div>', unsafe_allow_html=True)
 
 st.markdown(
     """
 <div class="warning-bar">
     <p class="warning-text">※本系統為個人自主開發，旨在優化查詢媒體露出流程與準確度，請勿用於非法行為😈</p>
-    <p class="warning-text">※已強化 CSV 站內搜尋巡查與撰文記者姓名識別，不進行題目去重，完整記錄轉載媒體🌏</p>
+    <p class="warning-text">※已強化 CSV 站內搜尋巡查，不進行題目去重，完整記錄轉載媒體🌏</p>
     <p class="warning-text">※檢索資料庫（database.csv）為「彰化家扶」常見出報媒體清單，開發者將不定期更新👀</p>
     <p class="warning-text">※開發者保有此系統所有權，敬請尊重開發者之權利。若有不法，將依中華民國相關法規追究⚠️</p>
 </div>
@@ -170,6 +170,17 @@ def clean_url_standard(url):
     url = url.strip()
     url = re.sub(r"[\?\&]utm_[^&]+", "", url)
     return url.rstrip('/')
+
+def deduplicate_by_url(articles):
+    """依據清理後的完全相同 URL 進行去重"""
+    unique_articles = []
+    seen_urls = set()
+    for art in articles:
+        std_url = clean_url_standard(art["url"])
+        if std_url and std_url not in seen_urls:
+            seen_urls.add(std_url)
+            unique_articles.append(art)
+    return unique_articles
 
 # ---------------------------------------------------------------------------
 # 4. 側邊欄與 database.csv 全量載入
@@ -248,7 +259,7 @@ def parse_pub_year(pub_date_str):
     return None
 
 
-def fetch_google_news_rss(query, target_year=None, default_media=""):
+def fetch_google_news_rss(query, target_year=None, default_media="", search_kw=""):
     """第一階段：Google 新聞搜索引擎"""
     results = []
     headers = {
@@ -282,6 +293,7 @@ def fetch_google_news_rss(query, target_year=None, default_media=""):
                         "url": link,
                         "media_name": source_text if source_text else default_media,
                         "date": pub_date,
+                        "search_kw": search_kw,
                         "source_stage": "第一階段 (Google全網)"
                     })
             except Exception:
@@ -293,7 +305,7 @@ def fetch_google_news_rss(query, target_year=None, default_media=""):
 
 
 def fetch_site_direct_search(target, org, keyword, target_year=None):
-    """第二階段：根據 database.csv 內的媒體進行真・站內搜尋巡查"""
+    """第二階段：去除 JavaScript 渲染並解析，對 database.csv 內的媒體進行真・站內搜尋巡查"""
     results = []
     media_name = target["name"]
     domain = target["domain"]
@@ -304,7 +316,7 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     }
 
-    # 1. 如果有網域，發起點對點強迫搜尋 (Direct Site Query)，移除過於嚴格的強迫雙引號
+    # 1. 如果有網域，發起點對點強迫搜尋 (Direct Site Query)
     site_query = f"site:{domain} {search_term}" if domain else f'{media_name} {search_term}'
     encoded_query = urllib.parse.quote(site_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -331,12 +343,13 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
                     "url": link,
                     "media_name": media_name,
                     "date": pub_date,
+                    "search_kw": keyword,
                     "source_stage": "第二階段 (CSV站內巡查)"
                 })
     except Exception:
         pass
 
-    # 2. 備用方案：若 direct query 無結果且有提供真實站內 URL，直接對該網站請求首頁/搜尋頁 parsing
+    # 2. 備用方案：若 direct query 無結果且有提供真實站內 URL，去除 JS 直接對該網站請求 HTML 進行 Beautifulsoup 解析
     if not results and base_url and base_url.startswith("http"):
         try:
             req = urllib.request.Request(base_url, headers=headers)
@@ -355,6 +368,7 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
                             "url": full_href,
                             "media_name": media_name,
                             "date": "",
+                            "search_kw": keyword,
                             "source_stage": "第二階段 (CSV站內巡查)"
                         })
         except Exception:
@@ -363,7 +377,7 @@ def fetch_site_direct_search(target, org, keyword, target_year=None):
     return results
 
 # ---------------------------------------------------------------------------
-# 6. 第三階段：網頁解析與記者姓名探針 V3 (優化版)
+# 6. 第三階段：網頁解析與記者姓名探針 (優化版)
 # ---------------------------------------------------------------------------
 
 def fetch_article_data(url):
@@ -412,7 +426,7 @@ def fetch_article_data(url):
 
 
 def reporter_detector_sensor_v3(article_text, meta_reporter=""):
-    """記者探針 V3：演算法優化辨識記者姓名"""
+    """記者探針：演算法優化辨識記者姓名"""
     exclude_words = {
         "彰化", "台中", "台北", "地方", "即時", "綜合", "專題", "社會", "生活",
         "新聞", "家扶", "中心", "本報", "特別", "責任", "編輯", "焦點", "總會", "報導", "公益",
@@ -432,7 +446,7 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
 
     clean_text = re.sub(r"\s+", " ", article_text).strip()
 
-    # 2. 強化 Regex 正規表達式清單 (包含多種臺灣常見新聞開頭與結尾署名格式)
+    # 2. 強化 Regex 正規表達式清單
     patterns = [
         r"[（\(〔\[【]\s*(?:特派|實習|攝影|駐地|專題)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／\s\-_]*[\u4e00-\u9fa5]*\s*(?:報導|攝影|特稿|專訪)?\s*[）\)〕\]】]",
         r"(?:特派|實習|攝影|駐地)?記者\s*([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*[\u4e00-\u9fa5]{2,6}\s*(?:報導|特別報導)",
@@ -442,7 +456,6 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
         r"([\u4e00-\u9fa5]{2,4})\s*[\/／]\s*(?:彰化|台中|台北|高雄|地方|即時|綜合|專題|生活)+\s*報導",
     ]
 
-    # 取內文前 800 字與最後 500 字進行針對性探針（記者名多出現在前後端）
     prefix_text = clean_text[:800]
     suffix_text = clean_text[-500:] if len(clean_text) > 800 else ""
     target_texts = [prefix_text, suffix_text]
@@ -460,8 +473,9 @@ def reporter_detector_sensor_v3(article_text, meta_reporter=""):
     return "編輯部"
 
 
-def process_single_article(item, office, staff_name, org, keyword, media_map):
+def process_single_article(item, office, staff_name, org, media_map):
     """處理單篇報導雙重核對與記者辨識"""
+    keyword = item.get("search_kw", "")
     raw_title = item["title"]
     clean_title = re.sub(r"\s*[\-\|｜\_]\s*.*$", "", raw_title).strip()
     
@@ -472,18 +486,15 @@ def process_single_article(item, office, staff_name, org, keyword, media_map):
 
     # 機構名稱與關鍵字雙重校驗
     has_org = (org in clean_title) or (org in article_snippet) or (short_org in clean_title) or (short_org in article_snippet)
-    has_keyword = (keyword in clean_title) or (keyword in article_snippet)
+    has_keyword = (keyword in clean_title) or (keyword in article_snippet) if keyword else True
 
-    # 只要標題同時包含機構（或簡稱）與關鍵字，即使動態網頁內文爬取失敗也予以保留
-    title_valid = ((org in clean_title) or (short_org in clean_title)) and (keyword in clean_title)
+    title_valid = ((org in clean_title) or (short_org in clean_title)) and (keyword in clean_title if keyword else True)
 
     if not (title_valid or (has_org and has_keyword)):
         return None
 
-    # 將內文與 meta_reporter 丟入探針
     reporter_name = reporter_detector_sensor_v3(combined_text, meta_reporter)
 
-    # 確定媒體類別
     m_name = item["media_name"]
     m_type = media_map.get(m_name, "地方網路新聞")
     if m_type == "地方網路新聞":
@@ -515,32 +526,49 @@ def trigger_5s_balloon_animation():
     st.balloons()
 
 
-def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_targets):
+def run_news_pipeline(office, staff_name, org, keyword1, keyword2, year, media_map, csv_targets):
+    kw_info = f"{keyword1}" + (f" / {keyword2}" if keyword2 else "")
     st.session_state["search_history"].append({
         "檢索時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "服務處": office,
         "同工姓名": staff_name,
         "機構": org,
-        "關鍵字": keyword,
+        "關鍵字": kw_info,
         "目標年份": year,
     })
 
-    all_raw_articles = []
+    # =================================================----------------------
+    # 📌 第一階段：Google 全網檢索（二次搜索 + URL 去重）
+    # 邏輯：(媒體名稱)(搜尋機構名稱)(關鍵字)
+    # =================================================----------------------
+    st.info(f'🔎 [第一階段] 正在執行 Google 全網兩次瀏覽檢索...')
+    
+    stage1_results_raw = []
+    
+    # 依媒體執行第一次與第二次搜索
+    for target in (csv_targets if csv_targets else [{"name": ""}]):
+        media_prefix = target["name"]
+        
+        # 第一次搜尋： (媒體名稱)(搜尋機構名稱)(新聞關鍵字1)
+        q1 = f"{media_prefix} {org} {keyword1}".strip()
+        stage1_results_raw.extend(fetch_google_news_rss(q1, target_year=year, default_media=media_prefix, search_kw=keyword1))
+        
+        # 第二次搜尋： (媒體名稱)(搜尋機構名稱)(新聞關鍵字2)
+        if keyword2:
+            q2 = f"{media_prefix} {org} {keyword2}".strip()
+            stage1_results_raw.extend(fetch_google_news_rss(q2, target_year=year, default_media=media_prefix, search_kw=keyword2))
+
+    # 第一階段 URL 完全相同去重
+    stage1_unique = deduplicate_by_url(stage1_results_raw)
+    st.markdown(f"👉 **第一階段 Google 全網雙次檢索完成，經 URL 去重後保留 {len(stage1_unique)} 筆報導**")
 
     # =================================================----------------------
-    # 📌 第一階段：全網搜索引擎檢索
+    # 📌 第二階段：Python site 站內搜索（去除 JS 渲染解析 + 二次搜索 + URL 去重）
+    # 邏輯：(搜尋機構名稱)(關鍵字)
     # =================================================----------------------
-    st.info(f'🔎 [第一階段] 正在以 Google 搜索引擎抓取：「({org}) ({keyword})」全網報導...')
-    google_query = f'{org} {keyword}'
-    stage1_results = fetch_google_news_rss(google_query, target_year=year)
-    all_raw_articles.extend(stage1_results)
-    st.markdown(f"👉 **第一階段抓取到 {len(stage1_results)} 筆報導**")
+    st.info(f'📑 [第二階段] 正在執行 Python site 站內巡查（去除 JS 渲染並解析）...')
 
-    # =================================================----------------------
-    # 📌 第二階段：利用 database.csv 逐一進行站內巡查
-    # =================================================----------------------
-    st.info(f'📑 [第二階段] 正在依據 database.csv 逐一進入錄入網站，進行「({org}) ({keyword})」站內巡查...')
-
+    stage2_results_raw = []
     if csv_targets:
         csv_progress_bar = st.progress(0)
         csv_status_text = st.empty()
@@ -551,32 +579,36 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
             csv_status_text.markdown(f"🔍 站內巡查中 ({idx+1}/{total_targets})：《**{target['name']}**》...")
             csv_progress_bar.progress(pct)
 
-            site_results = fetch_site_direct_search(target, org, keyword, target_year=year)
-            all_raw_articles.extend(site_results)
+            # 第一次搜尋：(搜尋機構名稱)(新聞關鍵字1)
+            site_res1 = fetch_site_direct_search(target, org, keyword1, target_year=year)
+            stage2_results_raw.extend(site_res1)
+
+            # 第二次搜尋：(搜尋機構名稱)(新聞關鍵字2)
+            if keyword2:
+                site_res2 = fetch_site_direct_search(target, org, keyword2, target_year=year)
+                stage2_results_raw.extend(site_res2)
 
         csv_progress_bar.empty()
         csv_status_text.empty()
 
-    # =================================================----------------------
-    # 📌 網址去重機制 (除非一模一樣，否則一律不去重)
-    # =================================================----------------------
-    unique_articles = []
-    seen_urls = set()
+    # 第二階段 URL 完全相同去重
+    stage2_unique = deduplicate_by_url(stage2_results_raw)
+    st.markdown(f"👉 **第二階段 CSV 站內巡查完成，經 URL 去重後保留 {len(stage2_unique)} 筆報導**")
 
-    for art in all_raw_articles:
-        std_url = clean_url_standard(art["url"])
-        if std_url not in seen_urls:
-            seen_urls.add(std_url)
-            unique_articles.append(art)
+    # =================================================----------------------
+    # 📌 需求 3 補充：合成需求 1 與需求 2 搜索結果，將 URL 完全相同進行去重
+    # =================================================----------------------
+    combined_raw = stage1_unique + stage2_unique
+    unique_articles = deduplicate_by_url(combined_raw)
 
-    st.markdown(f"📊 **一二階段合計擷取 {len(all_raw_articles)} 筆報導，經「網址 100% 相同」過濾後保留 {len(unique_articles)} 筆待解析網址。**")
+    st.markdown(f"📊 **一二階段合成總計，經「網址 100% 相同」去重後，最終保留 {len(unique_articles)} 筆待解析網址。**")
 
     if not unique_articles:
         st.error("❌ 第一階段與第二階段均未檢索到相關報導，請調整搜尋關鍵字。")
         return []
 
     # =================================================----------------------
-    # 📌 第三階段：啟用多線程併行解析網頁與記者姓名探針
+    # 📌 第三階段：併行解析網頁與記者姓名探針
     # =================================================----------------------
     st.info("✈️ [第三階段] 啟用多線程併行解析網頁與記者姓名探針...")
 
@@ -588,7 +620,7 @@ def run_news_pipeline(office, staff_name, org, keyword, year, media_map, csv_tar
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_item = {
-            executor.submit(process_single_article, item, office, staff_name, org, keyword, media_map): item 
+            executor.submit(process_single_article, item, office, staff_name, org, media_map): item 
             for item in unique_articles
         }
         for future in concurrent.futures.as_completed(future_to_item):
@@ -621,14 +653,17 @@ if sidebar_option == "🔍 檢索系統":
         org = st.text_input(
             "🏛️ 搜尋機構名稱：", value="", placeholder="e.g. 彰化家扶"
         )
-        year_input = st.text_input(
-            "📅 目標年份：", value="", placeholder="e.g. 2026"
+        keyword1 = st.text_input(
+            "🔑 搜尋新聞關鍵字 1：", value="", placeholder="e.g. 課輔班"
         )
 
     with col2:
         staff_name = st.text_input("👤 主責同工姓名：", value="", placeholder="e.g. 張小明")
-        keyword = st.text_input(
-            "🔑 搜尋新聞關鍵字：", value="", placeholder="e.g. 課輔班、相見歡、寒冬送暖"
+        year_input = st.text_input(
+            "📅 目標年份：", value="", placeholder="e.g. 2026"
+        )
+        keyword2 = st.text_input(
+            "🔑 搜尋新聞關鍵字 2（選填）：", value="", placeholder="e.g. 戶外教學"
         )
 
     search_button = st.button("🚀 開始三階段檢索與生成報表", use_container_width=True)
@@ -643,11 +678,11 @@ if sidebar_option == "🔍 檢索系統":
         except ValueError:
             year = datetime.date.today().year
 
-        if not keyword.strip() or not staff_name.strip():
-            st.warning("⚠️ 請完整填寫「搜尋新聞關鍵字」與「主責同工姓名」！")
+        if not keyword1.strip() or not staff_name.strip():
+            st.warning("⚠️ 請完整填寫「搜尋新聞關鍵字 1」與「主責同工姓名」！")
         else:
             final_data = run_news_pipeline(
-                office, staff_name.strip(), target_org, keyword.strip(), year, media_type_map, csv_targets
+                office, staff_name.strip(), target_org, keyword1.strip(), keyword2.strip(), year, media_type_map, csv_targets
             )
 
             if final_data:
@@ -672,7 +707,7 @@ if sidebar_option == "🔍 檢索系統":
                     st.download_button(
                         label="📥 下載輿情統計 Excel 報表",
                         data=output.getvalue(),
-                        file_name=f"{target_org}_{keyword}_精準輿情報表.xlsx",
+                        file_name=f"{target_org}_{keyword1}_精準輿情報表.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
@@ -693,8 +728,8 @@ elif sidebar_option == "💡 系統簡介":
     4. **內文探針與簡稱彈性過濾**：自動爬取新聞內文，偵測機構全稱與簡稱，以防止漏抓新聞。
     5. **記者署名識別功能**：涵蓋標準型、括號型、無記者字樣型、複合角色型（文／圖／攝影）等常見新聞署名格式。
     6. **無 API 依賴防爆機制**：100% Python 運算，防止觸發 Google 反爬蟲機制（Anti-bot protection），並免除 API 配置與額度限制。
-    7. **第一階段（Google全網）**：以全網搜尋引擎抓取「(搜尋機構名稱)(搜尋新聞關鍵字)」報導。
-    8. **第二階段（CSV真實站內巡查）**：利用 `database.csv` 紀錄的每一家媒體與網站，進行專屬站內檢索。
+    7. **第一階段（Google全網）**：以雙關鍵字形式進行2次全網搜索。
+    8. **第二階段（CSV真實站內巡查）**：利用 `database.csv` 紀錄的每一家媒體與網站，去除 JavaScript 渲染進行專屬站內檢索。
     9. **第三階段（多線程解析）**：啟用多線程併行解析網頁內文與記者姓名探針。
     10. **絕對不去重原則**：除非兩筆報導的 URL 網址完全相同，否則保留所有轉載與多方報導！
     """
